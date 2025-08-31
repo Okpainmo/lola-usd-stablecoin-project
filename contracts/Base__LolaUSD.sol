@@ -16,6 +16,8 @@ contract Base__LolaUSD {
     error LolaUSD__AccessDenied_AdminOnly();
     error LolaUSD__ProposalAlreadyExecuted();
     error LolaUSD__InvalidProposalCodeName();
+    error LolaUSD__ProposalIsNotMintable();
+    error  LolaUSD__ProposalIsNotBurnable();
 
     event Transfer(
         address indexed _owner,
@@ -31,9 +33,9 @@ contract Base__LolaUSD {
     address internal s_adminManagementCoreContractAddress; // needed to check admin rights and likely more
     address internal s_proposalManagementCoreContractAddress; // needed for interaction with the external proposals management core contract
 
-    IAdminManagement__Base internal s_adminMangementContract =
+    IAdminManagement__Base internal s_adminManagementContract__Base =
         IAdminManagement__Base(s_adminManagementCoreContractAddress);
-    IProposalManagement__Base internal s_proposalManagementContract =
+    IProposalManagement__Base internal s_proposalManagementContract__Base =
         IProposalManagement__Base(s_proposalManagementCoreContractAddress);
 
     string internal s_tokenName;
@@ -192,22 +194,40 @@ contract Base__LolaUSD {
         return true;
     }
 
+    function _normalize(string memory s) internal pure returns (bytes memory) {
+    return abi.encodePacked(_toLower(s));
+    }
+
+    function _toLower(string memory str) internal pure returns (string memory) {
+        bytes memory bStr = bytes(str);
+        for (uint i = 0; i < bStr.length; i++) {
+            if ((uint8(bStr[i]) >= 65) && (uint8(bStr[i]) <= 90)) {
+                bStr[i] = bytes1(uint8(bStr[i]) + 32);
+            }
+        }
+        return string(bStr);
+    }
+
     function mint(
         address _to,
-        uint256 _amount,
         uint256 _proposalId,
         string memory _proposalCodeName
     ) public {
-        _amount = _amount * 10 ** s_tokenDecimals;
-
-        if (!s_adminMangementContract.checkIsAdmin(msg.sender)) {
+        if (!s_adminManagementContract__Base.checkIsAdmin(msg.sender)) {
             revert LolaUSD__AccessDenied_AdminOnly();
         }
 
         IProposalManagement__Base.Proposal
-            memory proposal = s_proposalManagementContract.getProposalById(
-                _proposalId
-            );
+            memory proposal = s_proposalManagementContract__Base.getProposalById(
+            _proposalId
+        );
+
+        if (
+            keccak256(_normalize(proposal.proposalCodeName)) !=
+            keccak256(_normalize(_proposalCodeName))
+        ) {
+            revert LolaUSD__InvalidProposalCodeName();
+        }
 
         if (
             proposal.proposalStatus ==
@@ -217,15 +237,16 @@ contract Base__LolaUSD {
         }
 
         if (
-            keccak256(bytes(proposal.proposalCodeName)) !=
-            keccak256(bytes(_proposalCodeName))
+            proposal.proposalAction != IProposalManagement__Base.ProposalAction.Mint
         ) {
-            revert LolaUSD__InvalidProposalCodeName();
+            revert LolaUSD__ProposalIsNotMintable();
         }
 
         if (_to == address(0)) {
             revert LolaUSD__ReceiverAddressIsZeroAddress();
         }
+
+        uint256 _amount = proposal.tokenSupplyChange * 10 ** s_tokenDecimals;
 
         s_supply += _amount;
 
@@ -234,23 +255,20 @@ contract Base__LolaUSD {
         emit Transfer(address(0), _to, _amount);
 
         // updates the status of the proposal in the external proposal-management core contract to "executed"
-        s_proposalManagementContract.executeProposal(_proposalId);
+        s_proposalManagementContract__Base.executeProposal(_proposalId);
     }
 
     function burn(
         address _from,
-        uint256 _amount,
         uint256 _proposalId,
         string memory _proposalCodeName
     ) public {
-        _amount = _amount * 10 ** s_tokenDecimals;
-
-        if (!s_adminMangementContract.checkIsAdmin(msg.sender)) {
+        if (!s_adminManagementContract__Base.checkIsAdmin(msg.sender)) {
             revert LolaUSD__AccessDenied_AdminOnly();
         }
 
         IProposalManagement__Base.Proposal
-            memory proposal = s_proposalManagementContract.getProposalById(
+            memory proposal = s_proposalManagementContract__Base.getProposalById(
                 _proposalId
             );
 
@@ -262,15 +280,30 @@ contract Base__LolaUSD {
         }
 
         if (
-            keccak256(bytes(proposal.proposalCodeName)) !=
-            keccak256(bytes(_proposalCodeName))
+            keccak256(_normalize(proposal.proposalCodeName)) !=
+            keccak256(_normalize(_proposalCodeName))
         ) {
             revert LolaUSD__InvalidProposalCodeName();
+        }
+
+        if (
+            proposal.proposalStatus ==
+            IProposalManagement__Base.ProposalStatus.Executed
+        ) {
+            revert LolaUSD__ProposalAlreadyExecuted();
+        }
+
+        if (
+            proposal.proposalAction != IProposalManagement__Base.ProposalAction.Burn
+        ) {
+            revert LolaUSD__ProposalIsNotBurnable();
         }
 
         if (_from == address(0)) {
             revert LolaUSD__OwnerAddressIsZeroAddress();
         }
+
+        uint256 _amount = proposal.tokenSupplyChange * 10 ** s_tokenDecimals;
 
         if (balance[_from] < _amount) {
             revert LolaUSD__InsufficientBalance();
@@ -300,6 +333,6 @@ contract Base__LolaUSD {
         }
 
         // updates the status of the proposal in the external proposal-management core contract to "executed"
-        s_proposalManagementContract.executeProposal(_proposalId);
+        s_proposalManagementContract__Base.executeProposal(_proposalId);
     }
 }
